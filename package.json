@@ -1,0 +1,17 @@
+{
+  "name": "kloss",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/model.test.js",
+    "test:browser": "node tests/browser.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  }
+}
