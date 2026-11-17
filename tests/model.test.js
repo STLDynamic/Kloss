@@ -79,3 +79,16 @@ test('multiple recipe blocks bottleneck, repeated rows, unknown stock and zero p
   c=weeklyCoverage([{...a,stockDate:null},b],[p],['2026-W02'],'2026-01-05')['p/2026-W02'];assert.equal(c.unknown,true);
   c=weeklyCoverage([a,b],[{...p,weeklyPlans:{'2026-W02':0}}],['2026-W02'],'2026-01-05')['p/2026-W02'];near(c.required,0);
 });
+test('actual usage of one recipe component does not reserve it a second time',()=>{
+  const p=weeklyProduct('p','2',70);p.recipe.push({articleId:'b',pieces:1});
+  const a=weeklyArticle({stock:70,movements:[m('u','usage','2026-01-05',60,'2026-01-05')]});
+  const b={...weeklyArticle({stock:70}),id:'b',number:'B'};
+  const c=weeklyCoverage([a,b],[p],['2026-W02'],'2026-01-05')['p/2026-W02'];
+  near(c.possible,70);near(c.required,70);assert.deepEqual(c.missing,{});
+});
+test('weekly purchasing demand replaces monthly production and excludes recorded actual',()=>{
+ const a=weeklyArticle({stock:0,lead:0,buffer:0,coverage:7,plans:{'2026-01':31000}});
+ const p=weeklyProduct('p','2',70);p.plans={'2026-01':62000};
+ const derived=deriveArticle(a,[p]);near(forecast(derived,'2026-01-05').requiredQty,70);
+ p.weeklyPlans['2026-W02']=0;near(forecast(deriveArticle(a,[p]),'2026-01-05').requiredQty,0);
+});

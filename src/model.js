@@ -319,7 +319,7 @@ export function weeklyCoverage(articles,products,weeks,asOf=today()) {
       const needs=[...recipe].map(([id,per])=>{const a=byId.get(id),total=a.weeklyDemand[week];return [id,total?calendars.get(id).rateAt(day)*n*per/total:0,per];});
       const required=Math.max(0,...needs.map(([,qty,per])=>qty/per));
       let possible=required,unknown=false;
-      for(const [id,qty,per] of needs){const balance=balances.get(id);if(qty<=1e-8)continue;if(balance===null){unknown=true;possible=0;}else possible=Math.min(possible,Math.max(0,balance)/per);}
+      for(const [id,qty,per] of needs){const balance=balances.get(id);if(qty<=1e-8)continue;if(balance===null){unknown=true;possible=0;}else possible=Math.min(possible,required*Math.max(0,balance)/qty);}
       const cell=result[`${p.id}/${week}`];
       if(cell){cell.required+=required;cell.possible+=possible;cell.unknown ||= unknown;
         for(const [id,qty] of needs){const available=balances.get(id);const missing=available===null?qty:Math.max(0,qty-Math.max(0,available));if(missing>1e-8)cell.missing[id]=(cell.missing[id]||0)+missing;}
