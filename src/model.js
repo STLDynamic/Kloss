@@ -52,33 +52,55 @@ function consumptionCalendar(a,asOf) {
   function profile(month) {
     if(profiles.has(month)) return profiles.get(month);
     const start=dayNumber(`${month}-01`),end=dayNumber(`${monthAfter(month)}-01`);
-    let actualQty=0,recordedDays=0;
-    for(const m of actual) {const days=overlap(m.start,m.end,start,end);recordedDays+=days;actualQty+=m.qty*days/(m.end-m.start);}
+    let actualQty=0,recordedDays=0,weeklyDays=0;
+    const weeklyDay=day=>Object.hasOwn(a.weeklyDemand||{},isoWeek(new Date(day*DAY).toISOString().slice(0,10)));
+    for(let day=start;day<end;day++) {
+      if(weeklyDay(day)){weeklyDays++;continue;}
+      for(const m of actual)if(m.start<=day&&day<m.end){recordedDays++;actualQty+=m.qty/(m.end-m.start);}
+    }
     const pieces=Object.hasOwn(a.plans,month)?a.plans[month]:null;
-    const plannedQty=pieces===null?null:pieces;
+    const plannedQty=pieces===null?null:pieces*(end-start-weeklyDays)/(end-start);
     const exceeded=plannedQty!==null&&actualQty>plannedQty+1e-8;
     const remainingQty=plannedQty===null?null:Math.max(0,plannedQty-actualQty);
-    const unrecordedDays=end-start-recordedDays;
+    const unrecordedDays=end-start-weeklyDays-recordedDays;
     const rate=pieces===null||exceeded?dailyUsage(a):unrecordedDays>0?remainingQty/unrecordedDays:0;
     const pendingStart=Math.max(start,dayNumber(asOf));
-    const pendingDays=Math.max(0,end-pendingStart)-actual.reduce((sum,m)=>sum+overlap(m.start,m.end,pendingStart,end),0);
-    const value={month,pieces,plannedQty,actualQty,recordedDays,remainingQty,rate,exceeded,totalQty:actualQty+rate*unrecordedDays,production:a.productionSources?.[month]||null,source:pieces===null?'average':exceeded?'exceeded':'plan',forecastQty:Math.max(0,pendingDays)*rate};
+    let pendingDays=0;
+    for(let day=pendingStart;day<end;day++)if(!weeklyDay(day)&&!actual.some(m=>m.start<=day&&day<m.end))pendingDays++;
+    let weeklyTotal=0,weeklyForecast=0;
+    for(let day=start;day<end;day++)if(weeklyDay(day)){
+      const entry=actual.find(m=>m.start<=day&&day<m.end);
+      const qty=entry?entry.qty/(entry.end-entry.start):weeklyRate(day);
+      weeklyTotal+=qty;
+      if(day>=dayNumber(asOf)&&!entry)weeklyForecast+=qty;
+    }
+    const value={weeklyDays,month,pieces,plannedQty,actualQty,recordedDays,remainingQty,rate,exceeded,totalQty:actualQty+rate*unrecordedDays+weeklyTotal,production:a.productionSources?.[month]||null,source:pieces===null?'average':exceeded?'exceeded':'plan',forecastQty:Math.max(0,pendingDays)*rate+weeklyForecast};
     profiles.set(month,value);return value;
   }
   function missingDays(start,end) { return end-start-actual.reduce((sum,m)=>sum+overlap(m.start,m.end,start,end),0); }
+  function weeklyRate(day) {
+    const date=new Date(day*DAY).toISOString().slice(0,10),week=isoWeek(date);
+    if(!Object.hasOwn(a.weeklyDemand||{},week))return null;
+    const start=dayNumber(weekStart(week)),end=start+7;
+    const recorded=actual.reduce((s,m)=>s+overlap(m.start,m.end,start,end),0);
+    const used=actual.reduce((s,m)=>s+m.qty*overlap(m.start,m.end,start,end)/(m.end-m.start),0);
+    return recorded<7?Math.max(0,a.weeklyDemand[week]-used)/(7-recorded):0;
+  }
   function demand(start,end) {
+
     let result=0,cursor=start;
     while(cursor<end) {
       const month=new Date(cursor*DAY).toISOString().slice(0,7);
-      const stop=Math.min(end,dayNumber(`${monthAfter(month)}-01`));
-      result+=Math.max(0,missingDays(cursor,stop))*profile(month).rate;
+      const week=isoWeek(new Date(cursor*DAY).toISOString().slice(0,10));
+      const stop=Math.min(end,dayNumber(`${monthAfter(month)}-01`),dayNumber(weekStart(week))+7);
+      result+=Math.max(0,missingDays(cursor,stop))*(weeklyRate(cursor)??profile(month).rate);
       cursor=stop;
     }
     return result;
   }
   function rateAt(day) {
     if(actual.some(m=>m.start<=day&&day<m.end)) return 0;
-    return profile(new Date(day*DAY).toISOString().slice(0,7)).rate;
+    return weeklyRate(day) ?? profile(new Date(day*DAY).toISOString().slice(0,7)).rate;
   }
   return {profile,demand,rateAt,missingDays};
 }
@@ -138,7 +160,7 @@ export function voidMovement(a,id) {
 }
 export function forecast(a, asOf = today()) {
   const calendar=consumptionCalendar(a,asOf),currentMonth=calendar.profile(asOf.slice(0,7));
-  const stock=inventory(a,asOf,calendar),daily=currentMonth.rate;
+  const stock=inventory(a,asOf,calendar),daily=calendar.rateAt(dayNumber(asOf));
   const overdue=a.deliveries.filter(d=>d.date<asOf);
   if(!stock.confirmed) return {...stock,daily,currentMonth,overdue,status:'unconfirmed',shortage:null,orderIn:Infinity,orderQty:null,cartons:null,piecesPerPack:a.pack};
   const start=dayNumber(asOf);
@@ -149,6 +171,10 @@ export function forecast(a, asOf = today()) {
     const from=dayNumber(`${month}-01`),to=dayNumber(`${monthAfter(month)}-01`);
     if(from>=start)events.add(from);
     if(to>start)events.add(to);
+  }
+  for(const week of Object.keys(a.weeklyDemand||{})) {
+    const first=dayNumber(weekStart(week));
+    for(let d=first;d<=first+7;d++)if(d>=start)events.add(d);
   }
   const deliveries=new Map();
   for(const d of future) {const at=dayNumber(d.date);events.add(at);deliveries.set(at,(deliveries.get(at)||0)+d.qty);}
@@ -187,6 +213,10 @@ export function validateProduct(p,articles) {
   if(total===0)throw new Error('Välj minst en kloss med förbrukning per produkt.');
   if(!p.plans || typeof p.plans!=='object' || Array.isArray(p.plans))throw new Error('Ogiltig produktionsplan.');
   for(const [month,quantity] of Object.entries(p.plans))if(!validMonth(month)||!Number.isSafeInteger(quantity)||quantity<0||quantity>1000000000)throw new Error('Produktionsplanen ska innehålla hela produkter, 0–1 000 000 000 per månad.');
+  if(p.weeklyPlans!==undefined) {
+    if(!p.weeklyPlans || typeof p.weeklyPlans!=='object' || Array.isArray(p.weeklyPlans))throw new Error('Ogiltig veckoplan.');
+    for(const [week,n] of Object.entries(p.weeklyPlans))if(!validWeek(week)||!Number.isSafeInteger(n)||n<0||n>1e9)throw new Error('Veckoplanen kräver giltiga ISO-veckor och hela pallar (0–1 000 000 000).');
+  }
   return p;
 }
 export function validateData(articles,products) {
@@ -217,6 +247,7 @@ function appendProduction(a,p,perProduct) {
 export function deriveArticle(a,products=[]) {
   const result={...a,plans:{...a.plans},productionSources:{}};
   for(const p of products){const perProduct=productBlocks(p).get(a.id);if(perProduct)appendProduction(result,p,perProduct);}
+  appendWeekly(result,products);
   return result;
 }
 export function deriveArticles(articles,products=[]) {
@@ -226,6 +257,7 @@ export function deriveArticles(articles,products=[]) {
     const a=byId.get(id);if(!a)throw new Error(`Produkten ${p.name} hänvisar till en kloss som saknas.`);
     appendProduction(a,p,perProduct);
   }
+  for(const a of result)appendWeekly(a,products);
   return result;
 }
 export function parseData(raw) {
@@ -236,3 +268,66 @@ export function parseData(raw) {
   return {articles,products};
 }
 export function parseBackup(raw) { return parseData(raw).articles; }
+
+// ISO weeks are keyed by ISO year, not the calendar year of their Monday.
+export function isoWeek(date) {
+  const d=new Date(`${date}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+3-(d.getUTCDay()+6)%7);
+  const year=d.getUTCFullYear(),first=Date.UTC(year,0,1);
+  return `${year}-W${String(Math.ceil(((d.getTime()-first)/DAY+1)/7)).padStart(2,'0')}`;
+}
+export function weekStart(week) {
+  const year=Number(week.slice(0,4)),n=Number(week.slice(6));
+  const jan4=`${year}-01-04`,weekday=(new Date(`${jan4}T00:00:00Z`).getUTCDay()+6)%7;
+  return dateAfter(jan4,(n-1)*7-weekday);
+}
+export function validWeek(week) {return typeof week==='string' && /^\d{4}-W\d{2}$/.test(week) && week>='1900-W01' && week<='9998-W53' && isoWeek(weekStart(week))===week;}
+export function sortedProducts(products){return [...products].sort((a,b)=>a.name.localeCompare(b.name,'sv',{numeric:true})||a.id.localeCompare(b.id));}
+function appendWeekly(a,products) {
+  a.weeklyDemand={};
+  for(const p of products){const per=productBlocks(p).get(a.id);if(!per)continue;
+    for(const [week,n] of Object.entries(p.weeklyPlans||{})){
+      const sum=(a.weeklyDemand[week]||0)+n*per;
+      if(!Number.isSafeInteger(sum)||sum>1e12)throw new Error('För stor klossmängd i veckoplanen.');
+      a.weeklyDemand[week]=sum;
+    }
+  }
+}
+// Daily reservations retain debt: a later delivery cannot repair missed production.
+// Today's actual movements are already included in inventory(). Past weeks are history.
+export function weeklyCoverage(articles,products,weeks,asOf=today()) {
+  const derived=deriveArticles(articles,products),byId=new Map(derived.map(a=>[a.id,a]));
+  const calendars=new Map(derived.map(a=>[a.id,consumptionCalendar(a,asOf)]));
+  const balances=new Map(derived.map(a=>{const i=inventory(a,asOf);return [a.id,i.confirmed?i.estimated-i.deficit:null];}));
+  const result={};
+  for(const week of weeks)for(const p of products)if(Object.hasOwn(p.weeklyPlans||{},week))result[`${p.id}/${week}`]={planned:p.weeklyPlans[week],required:0,possible:0,missing:{},unknown:false,past:dateAfter(weekStart(week),6)<asOf};
+  const end=weeks.length?dateAfter(weekStart([...weeks].sort().at(-1)),7):asOf;
+  const ordered=sortedProducts(products);
+  const activeWeeks=[...new Set(products.flatMap(p=>Object.keys(p.weeklyPlans||{})))].sort();
+  for(let date=asOf;date<end;date=dateAfter(date,1)) {
+    if(!activeWeeks.includes(isoWeek(date))) {
+      const nextWeek=activeWeeks.map(weekStart).find(d=>d>date)||end;
+      const nextDelivery=derived.flatMap(a=>a.deliveries.map(d=>d.date)).filter(d=>d>=date).sort()[0]||end;
+      const stop=[nextWeek,nextDelivery,end].sort()[0];
+      if(stop>date){for(const a of derived)if(balances.get(a.id)!==null)balances.set(a.id,balances.get(a.id)-calendars.get(a.id).demand(dayNumber(date),dayNumber(stop)));date=dateAfter(stop,-1);continue;}
+    }
+    const day=dayNumber(date),week=isoWeek(date);
+    for(const a of derived)if(balances.get(a.id)!==null)for(const d of a.deliveries)if(d.date===date)balances.set(a.id,balances.get(a.id)+d.qty);
+    for(const p of ordered){
+      if(!Object.hasOwn(p.weeklyPlans||{},week))continue;
+      const recipe=productBlocks(p),n=p.weeklyPlans[week];
+      // Attribute remaining block demand in proportion to each product's weekly plan.
+      const needs=[...recipe].map(([id,per])=>{const a=byId.get(id),total=a.weeklyDemand[week];return [id,total?calendars.get(id).rateAt(day)*n*per/total:0,per];});
+      const required=Math.max(0,...needs.map(([,qty,per])=>qty/per));
+      let possible=required,unknown=false;
+      for(const [id,qty,per] of needs){const balance=balances.get(id);if(qty<=1e-8)continue;if(balance===null){unknown=true;possible=0;}else possible=Math.min(possible,Math.max(0,balance)/per);}
+      const cell=result[`${p.id}/${week}`];
+      if(cell){cell.required+=required;cell.possible+=possible;cell.unknown ||= unknown;
+        for(const [id,qty] of needs){const available=balances.get(id);const missing=available===null?qty:Math.max(0,qty-Math.max(0,available));if(missing>1e-8)cell.missing[id]=(cell.missing[id]||0)+missing;}
+      }
+      for(const [id,qty] of needs)if(balances.get(id)!==null)balances.set(id,balances.get(id)-qty);
+    }
+    // Older monthly plans / averages apply only on days without a weekly override.
+    for(const a of derived)if(!Object.hasOwn(a.weeklyDemand,week)&&balances.get(a.id)!==null)balances.set(a.id,balances.get(a.id)-calendars.get(a.id).rateAt(day));
+  }
+  return result;
+}

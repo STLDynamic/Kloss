@@ -20,9 +20,53 @@ Testy korzystają z osobnego, tymczasowego profilu i nie dotykają danych użytk
 
 ## GitHub Pages
 
-Po wysłaniu plików do repozytorium Kloss wybierz Settings → Pages → Deploy from
-branch, gałąź z kodem, katalog `/ (root)`. Pliki są statyczne i używają względnych
-ścieżek. Publikacja nie została wykonana podczas tworzenia wersji lokalnej.
+Repozytorium ma gałęzie `main` i `gh-pages`; aplikacja jest statyczna, bez etapu
+budowania, z adresem https://stldynamic.github.io/Kloss/. Przy wydaniu sprawdź
+aktualne źródło w Settings → Pages i wykonaj aktualizację fast-forward gałęzi
+publikacyjnej. Nie zmieniaj źródła Pages ani nie nadpisuj historii gałęzi.
+
+## Kalendarz tygodniowy
+
+Główny widok przedstawia **produkty/palety**, nie numery klocków. Kolumny to
+poniedziałek–niedziela według ISO (rok ISO może różnić się od roku daty).
+Zmiany liczby palet zapisują się po zatwierdzeniu pola / opuszczeniu go.
+Puste pole usuwa plan, `0` zapisuje świadomy brak produkcji. Strzałki przesuwają
+widok o sześć tygodni; „Denna vecka” wraca do bieżącego tygodnia.
+
+Zapotrzebowanie rozkłada się równomiernie na dni tygodnia. Każdego dnia produkty
+korzystają ze wspólnego magazynu w kolejności numeru/nazwy, z porównaniem
+numerycznym (Artikel 2 przed Artikel 5). Kolejność jest taka sama jak wiersze
+kalendarza. Dostawy są dostępne od początku swojego dnia; przeterminowane,
+nieprzyjęte dostawy są pomijane. Każde zapotrzebowanie rezerwuje materiał,
+także gdy tworzy niedobór. Późniejsza dostawa spłaca ten niedobór, ale nie
+zwiększa pokrycia produkcji, której termin już minął. Pokrycie sumuje możliwą
+produkcję w poszczególnych dniach, ograniczoną każdym składnikiem receptury;
+liczba pełnych palet jest zaokrąglana w dół. To szacunek planistyczny, nie zapis
+wykonanej produkcji. Dla trwającego tygodnia oceniany jest **pozostały** popyt od
+dzisiaj; minione tygodnie pokazują zapisany plan bez deklarowania historycznego
+pokrycia. Bieżący stan wynika z ostatniej inwentaryzacji i rzeczywistych operacji.
+
+Plan tygodniowy choćby jednego produktu zastępuje plan miesięczny/szacunkowy
+**dla używanych przez niego klocków przez cały tydzień**, również gdy ma wartość
+0. Wypełnij wszystkie produkty, które mają korzystać z tych klocków: puste
+produkty nie są automatycznie dopisywane. Na dniach bez planu tygodniowego
+obowiązuje starszy plan miesięczny (proporcjonalna część miesiąca) lub średnia.
+Miesięczne kwoty pozostają niezmienione i dostępne w starszych widokach; nie
+są dodawane do tygodniowego zapotrzebowania. Rzeczywiste zużycie w danym okresie
+zastępuje szacunki; pozostałe zapotrzebowanie tygodnia rozkłada się na dni bez
+zapisanego zużycia. Operacje przed ostatnią inwentaryzacją nie są odejmowane
+ponownie. Kalendarz i prognoza zakupów używają tego samego zapotrzebowania.
+
+Format danych Kloss v1 został rozszerzony o opcjonalne `weeklyPlans` produktu
+(np. `{"2026-W42": 2000}`). Starsze dane i kopie bez tego pola działają bez
+migracji; eksport zawiera oba rodzaje planów wraz z całym magazynem i historią.
+Nowych kopii nie należy edytować w starszej wersji aplikacji, która nie zna
+planów tygodniowych. Receptury dotyczą aktualnej wersji produktu — ich zmiana
+przelicza również zapisane plany tygodniowe, zachowując ich liczby.
+
+`npm test` obejmuje obliczenia miesięczne i tygodniowe, wspólny zapas, daty
+dostaw, inwentaryzacje, granice lat ISO oraz zgodność kopii. `npm run test:browser`
+sprawdza oba interfejsy, zapis, import/eksport i telefon z nieruchomą kolumną.
 
 ## Dane i obsługa
 

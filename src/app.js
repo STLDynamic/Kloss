@@ -1,4 +1,4 @@
-import { forecast, inventory, usageHistory, addMovement, voidMovement, today, dateAfter, validateArticle, validDate, SCHEMA_VERSION, monthlyPlan, monthAfter, validMonth, parseData, validateData, validateProduct, deriveArticle, productBlocks } from './model.js?v=1';
+import { forecast, inventory, usageHistory, addMovement, voidMovement, today, dateAfter, validateArticle, validDate, SCHEMA_VERSION, monthlyPlan, monthAfter, validMonth, parseData, validateData, validateProduct, deriveArticle, productBlocks, isoWeek, weekStart, validWeek, weeklyCoverage, sortedProducts } from './model.js?v=2';
 const $ = s => document.querySelector(s);
 const key = 'kloss.inventory.v1';
 const number = (n, digits=0) => new Intl.NumberFormat('sv-SE', {maximumFractionDigits:digits}).format(n);
@@ -8,7 +8,7 @@ const labels = {critical:'Risk för brist',order:'Dags att beställa',ok:'Lagret
 const movementNames = {usage:'Förbrukning',receipt:'Inleverans',count:'Inventering',adjustment:'Korrigering'};
 let articles = [], products = [], demo = false, draftDeliveries = [], storageBlocked = false, savedRaw = null;
 let stockId = null, receiptId = null, renderedDate = today();
-let view='stock',planStart=today().slice(0,7);
+let view='calendar',planStart=today().slice(0,7);
 const planDrafts=new Map(),productionDrafts=new Map();
 let productionStart=today().slice(0,7);
 try {
@@ -42,8 +42,9 @@ function render() {
   $('#date-warning').hidden=!unknown;
   $('#date-warning').textContent=`${unknown} ${unknown===1?'artikel saknar':'artiklar saknar'} ett bekräftat datum för lagersaldot. Öppna ”Lager & historik” för att ange rätt saldo och datum. Inga inköpsförslag beräknas för dessa artiklar ännu.`;
   const missing=products.filter(p=>!Object.hasOwn(p.plans,today().slice(0,7)));
-  $('#production-warning').hidden=!missing.length;
-  $('#production-warning').textContent=`Ofullständig produktionsplan denna månad: ${missing.map(p=>p.name).join(', ')}. Tomma produkter ingår inte i produktionsbehovet. Ange 0 om ingen produktion ska ske.`;
+  const hasWeekly=products.some(p=>Object.keys(p.weeklyPlans||{}).length);
+  $('#production-warning').hidden=view==='calendar'||(!missing.length&&!hasWeekly);
+  $('#production-warning').textContent=hasWeekly?'Veckoplaner har företräde för samma kloss och dagar. Månadsbeloppen nedan är sparade reservplaner; de läggs inte ovanpå veckobehovet.':`Ofullständig produktionsplan denna månad: ${missing.map(p=>p.name).join(', ')}. Tomma produkter ingår inte i produktionsbehovet. Ange 0 om ingen produktion ska ske.`;
   const critical=forecasts.filter(({f})=>f.status==='critical').length;
   const due=forecasts.filter(({f})=>f.orderIn<=0).length;
   const total=forecasts.reduce((s,{f})=>s+(f.estimated??0),0);
@@ -63,9 +64,10 @@ function render() {
   }).join('');
   $('#empty').hidden=articles.length>0;
   if(articles.length && !rows.length) $('#rows').innerHTML='<tr><td colspan="7" class="no-results">Inga artiklar matchar dina filter.</td></tr>';
+  if(view==='calendar')renderCalendar();
   if(view==='plan')renderPlan();
   if(view==='products')renderProducts();
-  $('#add').textContent=view==='products'&&articles.length?'+ Lägg till produkt':'+ Lägg till artikel';
+  $('#add').textContent=(view==='products'||view==='calendar')&&articles.length?'+ Lägg till produkt':'+ Lägg till artikel';
 }
 const form=$('#article-form');
 const field=name=>form.elements.namedItem(name);
@@ -83,7 +85,7 @@ function edit(id) {
   draftDeliveries=structuredClone(a.deliveries); deliveryRows(); packCalc();
   $('#editor-title').textContent=id?'Redigera artikel':'Ny artikel'; $('#delete').hidden=!id; $('#editor').showModal();
 }
-$('#add').onclick=()=>view==='products'&&articles.length?editProduct():edit(); $('#close').onclick=()=>$('#editor').close();
+$('#add').onclick=()=>(view==='products'||view==='calendar')&&articles.length?editProduct():edit(); $('#close').onclick=()=>$('#editor').close();
 $('#rows').onclick=e=>{ const stock=e.target.closest('[data-stock]'),editButton=e.target.closest('[data-edit]'); if(stock)openStock(stock.dataset.stock);else if(editButton)edit(editButton.dataset.edit); };
 for(const id of ['search','group-filter','status-filter','sort']) $(`#${id}`).addEventListener('input',render);
 for(const name of ['pack']) field(name).addEventListener('input',packCalc);
@@ -198,12 +200,12 @@ window.addEventListener('storage',e=>{if(e.key===key || e.key===null){if(planDra
 function refreshDate(){if(renderedDate!==today()){render();if($('#stock-dialog').open)renderStock();}}
 window.addEventListener('focus',refreshDate);document.addEventListener('visibilitychange',refreshDate);setInterval(refreshDate,60000);
 function setView(next) {
-  view=next;$('#inventory-view').hidden=next!=='stock';$('#plan-view').hidden=next!=='plan';$('#products-view').hidden=next!=='products';
-  for(const [id,active] of [['nav-stock',next==='stock'],['nav-plan',next==='plan'],['nav-products',next==='products']]) {const button=$(`#${id}`);button.classList.toggle('nav-active',active);if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');}
-  $('#page-title').innerHTML=next==='products'?'Från produkt till klossbehov<span>.</span>':next==='plan'?'Planera månad för månad<span>.</span>':'Full koll på lagret<span>.</span>';
-  $('#page-subtitle').textContent=next==='products'?'Planera din produktion. Låt klossbehovet räknas ut automatiskt.':next==='plan'?'Från produktionsbehov i stycken till rätt mängd kloss i lager.':'Vet vad du behöver beställa. Innan produktionen stannar.';
-  if(next==='plan')renderPlan();if(next==='products')renderProducts();
-  $('#add').textContent=next==='products'&&articles.length?'+ Lägg till produkt':'+ Lägg till artikel';
+  view=next;$('#calendar-view').hidden=next!=='calendar';$('#inventory-view').hidden=next!=='stock';$('#plan-view').hidden=next!=='plan';$('#products-view').hidden=next!=='products';
+  for(const [id,active] of [['nav-calendar',next==='calendar'],['nav-stock',next==='stock'],['nav-plan',next==='plan'],['nav-products',next==='products']]) {const button=$(`#${id}`);button.classList.toggle('nav-active',active);if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');}
+  $('#page-title').innerHTML=next==='calendar'?'Din produktion. Vecka för vecka<span>.</span>':next==='products'?'Från produkt till klossbehov<span>.</span>':next==='plan'?'Planera månad för månad<span>.</span>':'Full koll på lagret<span>.</span>';
+  $('#page-subtitle').textContent=next==='calendar'?'Planera pallar och se om klossarna räcker.':next==='products'?'Planera din produktion. Låt klossbehovet räknas ut automatiskt.':next==='plan'?'Från produktionsbehov i stycken till rätt mängd kloss i lager.':'Vet vad du behöver beställa. Innan produktionen stannar.';
+  if(next==='calendar')renderCalendar();if(next==='plan')renderPlan();if(next==='products')renderProducts();
+  $('#add').textContent=(next==='products'||next==='calendar')&&articles.length?'+ Lägg till produkt':'+ Lägg till artikel';
 }
 $('#nav-stock').onclick=()=>setView('stock');$('#nav-plan').onclick=()=>setView('plan');$('#nav-products').onclick=()=>setView('products');
 function planMonths(){return Array.from({length:6},(_,i)=>monthAfter(planStart,i));}
@@ -282,7 +284,7 @@ $('#add-recipe').onclick=()=>{recipeDraft.push({articleId:null,pieces:0});render
 $('#product-close').onclick=()=>$('#product-editor').close();
 productForm.onsubmit=e=>{
   e.preventDefault();const previous=products.find(p=>p.id===pf('id').value);
-  const p={id:previous?.id||crypto.randomUUID(),name:pf('name').value.trim(),notes:pf('notes').value.trim(),plans:structuredClone(previous?.plans||{}),recipe:structuredClone(recipeDraft)};
+  const p={id:previous?.id||crypto.randomUUID(),name:pf('name').value.trim(),notes:pf('notes').value.trim(),plans:structuredClone(previous?.plans||{}),...(previous?.weeklyPlans?{weeklyPlans:structuredClone(previous.weeklyPlans)}:{}),recipe:structuredClone(recipeDraft)};
   const next=previous?products.map(x=>x.id===p.id?p:x):[...products,p];
   try {validateProduct(p,articles);validateData(articles,next);}catch(err){$('#product-error').textContent=err.message;$('#product-error').hidden=false;return;}
   if(persist(articles,demo,next)){if(!previous)$('#product-search').value='';$('#product-editor').close();if(view==='products')renderProducts();notify('Produkten har sparats. Klossbehovet är uppdaterat.');}
@@ -345,4 +347,33 @@ $('#production-prev').onclick=()=>{productionStart=monthAfter(productionStart,-6
 $('#production-start').onchange=e=>{if(validMonth(e.target.value)&&e.target.value<='9998-07'){productionStart=e.target.value;renderProducts();}else e.target.value=productionStart;};
 $('#product-search').oninput=renderProducts;
 
+let calendarStart=isoWeek(today());
+function calendarWeeks(){return Array.from({length:6},(_,i)=>isoWeek(dateAfter(weekStart(calendarStart),i*7)));}
+function renderCalendar(){
+  const weeks=calendarWeeks(),rows=sortedProducts(products),coverage=weeklyCoverage(articles,products,weeks);
+  $('#week-start').value=calendarStart;
+  $('#week-prev').disabled=weekStart(calendarStart)<'1900-02-12';$('#week-next').disabled=weekStart(calendarStart)>'9998-10-01';
+  $('#week-empty').hidden=products.length>0;
+  $('#week-head').innerHTML=`<tr><th>PRODUKT / PALL<span class="muted">Recept per pall · st kloss</span></th>${weeks.map(w=>`<th class="${w===isoWeek(today())?'current-month':''}">Vecka ${Number(w.slice(6))} · ${w.slice(0,4)}<span class="muted">${pretty(weekStart(w))} – ${pretty(dateAfter(weekStart(w),6))}</span></th>`).join('')}</tr>`;
+  $('#week-rows').innerHTML=rows.map(p=>`<tr><td><strong>${esc(p.name)}</strong><span class="muted">${[...productBlocks(p)].map(([id,n])=>`${number(n)} × ${esc(articles.find(a=>a.id===id)?.number)}`).join(' · ')}</span><button class="stock-shortcut" data-recipe="${esc(p.id)}">Klossrecept</button></td>${weeks.map(w=>{const value=p.weeklyPlans?.[w],c=coverage[`${p.id}/${w}`];let info='<span class="muted">Ej planerat</span>';
+    if(c){const ratio=c.required>0?Math.min(1,c.possible/c.required):1,cls=c.unknown?'unknown':ratio>=1-1e-8?'full':ratio>0?'partial':'none';
+      info=c.past?'<span class="muted">Sparad plan · tidigare vecka</span>':`<div class="coverage ${cls}" role="meter" aria-label="Materialtäckning" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(ratio*100)}"><i style="width:${ratio*100}%"></i></div><strong class="coverage-label">${c.unknown?'Bekräfta lagersaldo':value===0?'Ingen produktion':`${number(Math.floor(c.possible+1e-8))} av ${number(c.required,1)} pallar möjliga`}</strong><span class="muted">${w===isoWeek(today())?'Återstående behov från idag':'Planerat materialbehov'} · ${Math.round(ratio*100)} % täckning</span>${Object.entries(c.missing).map(([id,n])=>`<span class="warning-text">Saknas: ${esc(articles.find(a=>a.id===id)?.number)} · ${number(Math.ceil(n-1e-8))} st</span>`).join('')}`;
+    }
+    return `<td><label class="week-input">Antal pallar<input type="number" inputmode="numeric" min="0" max="1000000000" step="1" data-product="${esc(p.id)}" data-week="${w}" aria-label="${esc(p.name)} · ${w} · pallar" value="${value??''}" placeholder="Ej planerat"></label>${info}</td>`;}).join('')}</tr>`).join('');
+}
+$('#nav-calendar').onclick=()=>{setView('calendar');render();};
+$('#week-products').onclick=()=>setView('products');
+$('#calendar-export').onclick=()=>$('#export').click();$('#calendar-import').onclick=()=>$('#import').click();
+$('#week-rows').onclick=e=>{const b=e.target.closest('[data-recipe]');if(b)editProduct(b.dataset.recipe);};
+$('#week-rows').onchange=e=>{
+  const input=e.target;if(!input.dataset.week)return;
+  const value=input.value;
+  if(!input.validity.valid||!validProductionValue(value)){input.setAttribute('aria-invalid','true');$('#week-status').textContent='Ange hela pallar mellan 0 och 1 000 000 000.';return;}
+  const next=products.map(p=>{if(p.id!==input.dataset.product)return p;const weeklyPlans={...p.weeklyPlans};if(value==='')delete weeklyPlans[input.dataset.week];else weeklyPlans[input.dataset.week]=Number(value);return {...p,weeklyPlans};});
+  if(persist(articles,demo,next))$('#week-status').textContent='Alla ändringar sparade';
+};
+function moveWeeks(n){calendarStart=isoWeek(dateAfter(weekStart(calendarStart),n*7));renderCalendar();}
+$('#week-prev').onclick=()=>moveWeeks(-6);$('#week-next').onclick=()=>moveWeeks(6);$('#week-today').onclick=()=>{calendarStart=isoWeek(today());renderCalendar();};
+$('#week-start').onchange=e=>{if(validWeek(e.target.value)&&e.target.value<='9998-W45'){calendarStart=e.target.value;renderCalendar();}else e.target.value=calendarStart;};
+setView('calendar');
 render();
